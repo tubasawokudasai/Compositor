@@ -116,28 +116,34 @@ extension EditorSession {
     /// same shape Remove Background masks out, as a selection instead.
     var canSelectSubject: Bool { canEditSelection && document != nil && !isProjectBusy }
 
-    func selectSubject(mode: SelectionMode = .replace) async {
+    /// Executes subject detection without setting `brushError` on failure.
+    /// Returns true if subject selection was found and applied, throws on detection error.
+    @discardableResult
+    func performSelectSubject(mode: SelectionMode = .replace) async throws -> Bool {
         guard canSelectSubject, let document,
-              let context = try? BrushRaster.context(width: document.width, height: document.height, mask: false) else { return }
+              let context = try? BrushRaster.context(width: document.width, height: document.height, mask: false) else { return false }
         drawLiveComposite(document, in: context)
-        guard let shown = context.makeImage() else { return }
+        guard let shown = context.makeImage() else { return false }
         isProjectBusy = true
-        let found = await Task.detached(priority: .userInitiated) { () -> Result<CGImage, Error> in
-            do { return .success(try SubjectRemoval.subjectMask(shown, under: nil, settings: FilterSettings())) }
-            catch { return .failure(error) }
+        defer { isProjectBusy = false }
+        let mask = try await Task.detached(priority: .userInitiated) { () -> CGImage in
+            try SubjectRemoval.subjectMask(shown, under: nil, settings: FilterSettings())
         }.value
-        isProjectBusy = false
-        guard self.document?.id == document.id else { return }
-        switch found {
-        case .failure(let error):
+        guard self.document?.id == document.id else { return false }
+        guard let traced = MaskTracing.whitePixels(in: mask) else { return false }
+        var toDocument = BrushRaster.pixelToDocument(LayerTransform(origin: .zero, size: document.size),
+                                                     width: mask.width, height: mask.height)
+        guard let outline = traced.copy(using: &toDocument) else { return false }
+        applySelection(outline, mode: mode, name: "Select Subject")
+        return true
+    }
+
+    func selectSubject(mode: SelectionMode = .replace) async {
+        do {
+            let ok = try await performSelectSubject(mode: mode)
+            if !ok { NSSound.beep() }
+        } catch {
             brushError = error.localizedDescription
-        case .success(let mask):
-            // White where the subject is, so its outline is the selection.
-            guard let traced = MaskTracing.whitePixels(in: mask) else { NSSound.beep(); return }
-            var toDocument = BrushRaster.pixelToDocument(LayerTransform(origin: .zero, size: document.size),
-                                                         width: mask.width, height: mask.height)
-            guard let outline = traced.copy(using: &toDocument) else { return }
-            applySelection(outline, mode: mode, name: "Select Subject")
         }
     }
 }

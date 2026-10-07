@@ -192,6 +192,10 @@ struct CompositorApp: App {
                 CommandGroup(after: .pasteboard) {
                     Divider()
                     Button("Keyboard Shortcuts…") { ShortcutSettings.shared.show() }
+                    Divider()
+                    Toggle("AI Assistant", isOn: Binding(get: { session.showsAIChat }, set: { session.showsAIChat = $0 }))
+                        .configuredKeyboardShortcut("a", modifiers: [.command, .option])
+                    Button("AI Settings…") { AISettingsWindow.shared.show() }
                     // Photoshop's fill shortcuts; in a text field they keep their text meaning.
                     Button("Fill with Foreground Color") {
                         if NSApp.keyWindow?.firstResponder is NSTextView {

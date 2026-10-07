@@ -108,6 +108,16 @@ actor ImageExporter {
         ] as CFDictionary)
     }
 
+    nonisolated static func encodePNG(_ image: CGImage) throws -> Data {
+        let data = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else {
+            throw ExportError.encode
+        }
+        CGImageDestinationAddImage(destination, image, nil)
+        guard CGImageDestinationFinalize(destination) else { throw ExportError.encode }
+        return data as Data
+    }
+
     private func encode(_ image: CGImage, type: UTType, properties: CFDictionary? = nil) throws -> Data {
         let data = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(data, type.identifier as CFString, 1, nil) else {

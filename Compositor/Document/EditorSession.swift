@@ -105,6 +105,8 @@ final class EditorSession {
     var document: CanvasDocument?
     var canvasFocusRequest = 0
     var showsSampleRing = true
+    /// Whether the AI assistant prompt bar is visible at the bottom of the canvas.
+    var showsAIChat = false
     var adjustmentOriginal: LayerAdjustment?
     var adjustmentEditingID: UUID? { didSet { resumeFileRequests() } }
     /// The layer whose effects panel is open.
@@ -980,3 +982,74 @@ final class EditorSession {
         viewport.setZoom(target, anchoredAt: viewport.center, documentSize: document.size)
     }
 }
+
+// MARK: - Inpainting & Mask Helpers
+
+extension EditorSession {
+    /// Generates standard inpainting mask PNG data matching the active layer's resolution.
+    /// Returns nil if no selection is active, or if no layer/document is present.
+    func activeSelectionInpaintingMaskPNG() throws -> Data? {
+        guard let selection, !selection.isEmpty, let document, let layer = activeLayer else {
+            return nil
+        }
+        let width = layer.asset?.image.width ?? document.width
+        let height = layer.asset?.image.height ?? document.height
+        return try selection.inpaintingMaskPNG(
+            width: width,
+            height: height,
+            canvasSize: document.size,
+            layerTransform: layer.transform
+        )
+    }
+
+    /// Generates PNG data for the active layer's pixel content.
+    func activeLayerImagePNG() throws -> Data? {
+        guard let layer = activeLayer, let image = layer.asset?.image else {
+            return nil
+        }
+        return try ImageExporter.encodePNG(image)
+    }
+
+    /// Updates the active layer or inserts a new repair layer with an inpainting result image.
+    /// Changes are committed to DocumentHistory so they can be undone with Cmd+Z.
+    func applyInpaintedImage(_ image: CGImage, createNewLayer: Bool = false) {
+        guard let document, let activeLayerID,
+              let index = document.layers.firstIndex(where: { $0.id == activeLayerID }),
+              let thumbnail = try? PixelInvert.thumbnail(of: image) else { return }
+        let current = document.layers[index]
+        finishOpacityEdit()
+        beginEdit("AI Generative Fill")
+        if createNewLayer {
+            var newLayer = ImageLayer(
+                asset: ImportedImage(image: image, thumbnail: thumbnail, name: "Generative Fill"),
+                origin: current.origin
+            )
+            newLayer.name = "Generative Fill"
+            newLayer.parentID = current.isGroup ? current.id : current.parentID
+            self.document?.layers.insert(newLayer, at: index + 1)
+            self.activeLayerID = newLayer.id
+        } else {
+            let updatedAsset = ImportedImage(image: image, thumbnail: thumbnail, name: current.name)
+            self.document?.layers[index] = ImageLayer(
+                id: current.id,
+                asset: updatedAsset,
+                name: current.name,
+                isVisible: current.isVisible,
+                transform: current.transform,
+                parentID: current.parentID,
+                isGroup: false,
+                opacity: current.opacity,
+                blendMode: current.blendMode,
+                mask: current.mask,
+                maskSourceID: current.maskSourceID,
+                adjustment: current.adjustment,
+                shape: current.shape,
+                effects: current.effects,
+                text: current.text
+            )
+        }
+        brushRevision += 1
+        endEdit()
+    }
+}
+

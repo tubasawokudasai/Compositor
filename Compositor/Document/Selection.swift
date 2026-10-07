@@ -46,6 +46,86 @@ extension DocumentSelection {
         let image = try local.coverage(width: Int(region.width), height: Int(region.height))
         return SelectionClip(rect: region, coverage: image)
     }
+
+    /// Returns true if the selection encompasses the full canvas.
+    func isSelectAll(canvasSize: CGSize) -> Bool {
+        if isEmpty { return false }
+        let box = path.boundingBoxOfPath
+        let canvasRect = CGRect(origin: .zero, size: canvasSize)
+        if box.contains(canvasRect) { return true }
+        let dw = abs(box.width - canvasSize.width)
+        let dh = abs(box.height - canvasSize.height)
+        let dx = abs(box.minX)
+        let dy = abs(box.minY)
+        return dw <= 2 && dh <= 2 && dx <= 2 && dy <= 2
+    }
+
+    /// Renders an inpainting mask PNG matching the given pixel dimensions.
+    /// Following the OpenAI / Inpainting standard:
+    /// - Selected pixels (to be replaced): Transparent (Alpha = 0) and White (RGB = 255).
+    /// - Unselected pixels (to be preserved): Opaque (Alpha = 255) and Black (RGB = 0).
+    func inpaintingMaskPNG(
+        width: Int,
+        height: Int,
+        canvasSize: CGSize,
+        layerTransform: LayerTransform? = nil
+    ) throws -> Data {
+        guard width > 0, height > 0, width * height <= DocumentLimits.maxSurfacePixels else {
+            throw ExportError.tooLarge
+        }
+        let context = try BrushRaster.context(width: width, height: height, mask: true)
+        context.setFillColor(gray: 0, alpha: 1)
+        context.fill(CGRect(x: 0, y: 0, width: width, height: height))
+
+        let clip = try self.clip(canvas: canvasSize)
+        if let layerTransform {
+            context.concatenate(BrushRaster.pixelToDocument(layerTransform, width: width, height: height).inverted())
+        }
+        clip.apply(to: context)
+        context.setFillColor(gray: 1, alpha: 1)
+        context.fill(clip.rect)
+
+        guard let rawMaskData = context.data else {
+            throw ExportError.render
+        }
+
+        let bytesPerRow = context.bytesPerRow
+        let maskBytes = rawMaskData.bindMemory(to: UInt8.self, capacity: bytesPerRow * height)
+        var rgba = [UInt8](repeating: 0, count: width * height * 4)
+
+        for y in 0..<height {
+            let rowOffset = y * bytesPerRow
+            let targetRowOffset = y * width * 4
+            for x in 0..<width {
+                let c = maskBytes[rowOffset + x]
+                let targetOffset = targetRowOffset + (x * 4)
+                rgba[targetOffset + 0] = c          // R (white where selected)
+                rgba[targetOffset + 1] = c          // G (white where selected)
+                rgba[targetOffset + 2] = c          // B (white where selected)
+                rgba[targetOffset + 3] = 255 - c    // Alpha (0 where selected / transparent)
+            }
+        }
+
+        guard let provider = CGDataProvider(data: Data(rgba) as CFData),
+              let colorSpace = CGColorSpace(name: CGColorSpace.sRGB),
+              let maskCGImage = CGImage(
+                  width: width,
+                  height: height,
+                  bitsPerComponent: 8,
+                  bitsPerPixel: 32,
+                  bytesPerRow: width * 4,
+                  space: colorSpace,
+                  bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+                  provider: provider,
+                  decode: nil,
+                  shouldInterpolate: false,
+                  intent: .defaultIntent
+              ) else {
+            throw ExportError.render
+        }
+
+        return try ImageExporter.encodePNG(maskCGImage)
+    }
 }
 
 /// Selection coverage for one region of the document. Applied as a clip, soft edges

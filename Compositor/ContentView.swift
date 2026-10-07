@@ -104,6 +104,11 @@ struct ContentView: View {
                                     .padding(.bottom, 14)
                                     .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
                             }
+                            if session.showsAIChat {
+                                AIChatPanel(session: session)
+                                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
+                                    .transition(.move(edge: .bottom).combined(with: .opacity))
+                            }
                         }
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("editor")) } action: { canvasFrame = $0 }
                     }
@@ -169,9 +174,9 @@ struct ContentView: View {
                 ToolbarItem(placement: .navigation) {
                     ProjectTabStrip(workspace: workspace)
                         // As wide as the toolbar allows: the window less the traffic lights and New button before it
-                        // and the zoom controls after it. Bounded, so adding tabs never pushes those aside; the
+                        // and the zoom and AI controls after it. Bounded, so adding tabs never pushes those aside; the
                         // strip scrolls instead.
-                        .frame(width: max(200, windowWidth - 352), height: 34, alignment: .center)
+                        .frame(width: max(200, windowWidth - 420), height: 34, alignment: .center)
                 }
                 .sharedBackgroundVisibility(.hidden)
             }
@@ -197,6 +202,19 @@ struct ContentView: View {
                         Image(systemName: "minus.magnifyingglass")
                     }.help("Zoom out (⌘−)").disabled(session.document == nil)
                 }
+                .padding(.horizontal, 4)
+            }
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    withAnimation(.easeInOut(duration: 0.2)) {
+                        session.showsAIChat.toggle()
+                    }
+                } label: {
+                    Image(systemName: "sparkles")
+                        .foregroundStyle(session.showsAIChat ? Color.accentColor : Color.primary)
+                }
+                .help("AI Assistant (⌥⌘A)")
+                .accessibilityIdentifier("toggleAIAssistant")
                 .padding(.horizontal, 4)
             }
         }
@@ -271,7 +289,7 @@ struct ContentView: View {
                 // No cancel role: an alert with only a cancel button gets a second OK of its own.
                 Button("OK") { session.importError = nil }
             } message: { Text(session.importError ?? "") }
-        .alert("Couldn’t paint", isPresented: Binding(get: { session.brushError != nil },
+        .alert(session.brushError?.contains("subject") == true ? "Subject Selection" : "Couldn’t paint", isPresented: Binding(get: { session.brushError != nil },
             set: { if !$0 { session.brushError = nil } })) {
                 Button("OK") { session.brushError = nil }
             } message: { Text(session.brushError ?? "") }
